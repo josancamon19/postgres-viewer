@@ -1,0 +1,20 @@
+[package]
+name = "postgres-viewer"
+version = "0.1.0"
+description = "A fast read-only PostgreSQL and Supabase viewer"
+authors = ["postgres-viewer"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0", features = [] }
+
+[dependencies]
+native-tls = "0.2"
+postgres-native-tls = "0.5"
+security-framework = "3.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.0", features = [] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"] }
+uuid = { version = "1", features = ["v4", "serde"] }
