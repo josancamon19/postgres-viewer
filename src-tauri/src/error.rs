@@ -68,3 +68,9 @@ impl From<security_framework::base::Error> for AppError {
         Self::new("keychain_error", value.to_string())
     }
 }
+
+impl From<reqwest::Error> for AppError {
+    fn from(value: reqwest::Error) -> Self {
+        Self::new("network_error", value.to_string())
+    }
+}

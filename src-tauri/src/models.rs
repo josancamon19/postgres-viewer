@@ -5,6 +5,8 @@ use serde_json::Value;
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionInfo {
     pub id: String,
+    pub saved_connection_id: String,
+    pub label: String,
     pub database: String,
     pub user: String,
 }
@@ -18,19 +20,6 @@ pub struct SavedConnection {
     pub database: String,
     pub user: String,
     pub last_used: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredConnection {
-    pub url: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct StoredQuery {
-    pub connection_id: String,
-    pub sql: String,
-    pub page_size: u32,
-    pub columns: Vec<QueryColumn>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +62,14 @@ pub struct IndexInfo {
     pub primary: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableIdentity {
+    pub editable: bool,
+    pub columns: Vec<String>,
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SortSpec {
@@ -95,6 +92,8 @@ pub struct TablePage {
     pub page: u32,
     pub page_size: u32,
     pub has_more: bool,
+    pub from_cache: bool,
+    pub identity: TableIdentity,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,4 +105,30 @@ pub struct QueryPage {
     pub page: u32,
     pub page_size: u32,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettings {
+    pub has_openai_api_key: bool,
+    pub openai_model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedSql {
+    pub sql: String,
+    pub explanation: String,
+    pub confidence: String,
+    pub referenced_tables: Vec<String>,
+    pub auto_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteResult {
+    pub rows_affected: u64,
+    pub message: String,
+    pub columns: Vec<QueryColumn>,
+    pub rows: Vec<Value>,
 }

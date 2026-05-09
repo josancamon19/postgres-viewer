@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Database,
+  Edit3,
   FileSearch,
   Loader2,
   Play,
   RefreshCw,
   Search,
+  Settings,
+  Sparkles,
   Square,
   Table2,
   Trash2,
@@ -15,7 +18,9 @@ import { api } from "./api";
 import { ResultGrid } from "./ResultGrid";
 import type {
   AppError,
+  AppSettings,
   ConnectionInfo,
+  GeneratedSql,
   IndexInfo,
   QueryPage,
   SavedConnection,
@@ -23,11 +28,12 @@ import type {
   SortSpec,
   TableInfo,
   TablePage,
+  WriteResult,
 } from "./types";
 
 const PAGE_SIZE = 500;
 
-type WorkspaceTab = "table" | "query";
+type WorkspaceTab = "table" | "query" | "settings";
 
 function App() {
   const [connectionUrl, setConnectionUrl] = useState("");
@@ -39,13 +45,22 @@ function App() {
   const [selectedTable, setSelectedTable] = useState<TableInfo | null>(null);
   const [indexes, setIndexes] = useState<IndexInfo[]>([]);
   const [tablePage, setTablePage] = useState<TablePage | null>(null);
+  const [tablePages, setTablePages] = useState<Record<string, TablePage>>({});
   const [tableSort, setTableSort] = useState<SortSpec | null>(null);
+  const [editMode, setEditMode] = useState(false);
   const [sql, setSql] = useState("select now();");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [generatedSql, setGeneratedSql] = useState<GeneratedSql | null>(null);
   const [queryPage, setQueryPage] = useState<QueryPage | null>(null);
+  const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
+  const [pendingWriteSql, setPendingWriteSql] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("table");
   const [loading, setLoading] = useState(false);
   const [queryRunning, setQueryRunning] = useState(false);
+  const [aiRunning, setAiRunning] = useState(false);
   const [requestId, setRequestId] = useState<string | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [openaiKeyInput, setOpenaiKeyInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const resultColumns = useMemo(
@@ -59,6 +74,7 @@ function App() {
 
   useEffect(() => {
     void refreshSavedConnections();
+    void refreshSettings();
   }, []);
 
   useEffect(() => {
@@ -90,6 +106,7 @@ function App() {
         setSelectedTable(null);
         setIndexes([]);
         setTablePage(null);
+        setEditMode(false);
       })
       .catch((caught) => setError(errorMessage(caught)))
       .finally(() => setLoading(false));
@@ -132,9 +149,52 @@ function App() {
     }
   }
 
+  async function refreshSettings() {
+    try {
+      setSettings(await api.getSettings());
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function saveOpenaiKey() {
+    setError(null);
+    try {
+      setSettings(await api.setOpenaiApiKey(openaiKeyInput));
+      setOpenaiKeyInput("");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function clearOpenaiKey() {
+    setError(null);
+    try {
+      setSettings(await api.clearOpenaiApiKey());
+      setOpenaiKeyInput("");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
   async function forgetSavedConnection(savedConnectionId: string) {
     try {
       setSavedConnections(await api.forgetSavedConnection(savedConnectionId));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    }
+  }
+
+  async function renameSavedConnection(savedConnectionId: string, currentLabel: string) {
+    const label = window.prompt("Connection name", currentLabel);
+    if (label === null) return;
+
+    try {
+      const nextConnections = await api.updateSavedConnectionLabel(savedConnectionId, label);
+      setSavedConnections(nextConnections);
+      setConnection((current) =>
+        current?.savedConnectionId === savedConnectionId ? { ...current, label: label.trim() } : current,
+      );
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -151,16 +211,23 @@ function App() {
     setSelectedTable(null);
     setIndexes([]);
     setTablePage(null);
+    setTablePages({});
+    setEditMode(false);
     setQueryPage(null);
+    setWriteResult(null);
   }
 
   async function openTable(table: TableInfo, page = 0, sort = tableSort) {
     if (!connection) return;
 
     setError(null);
-    setLoading(true);
     setSelectedTable(table);
+    setEditMode(false);
     setActiveTab("table");
+    const cacheKey = tablePageCacheKey(table, page, sort);
+    const cachedPage = tablePages[cacheKey];
+    setTablePage(cachedPage ?? null);
+    setLoading(true);
 
     try {
       const [nextIndexes, nextPage] = await Promise.all([
@@ -169,6 +236,17 @@ function App() {
       ]);
       setIndexes(nextIndexes);
       setTablePage(nextPage);
+      setTablePages((current) => ({ ...current, [cacheKey]: nextPage }));
+
+      if (nextPage.fromCache) {
+        api
+          .refreshTableCache(connection.id, table.schema, table.name, page, PAGE_SIZE, sort)
+          .then((freshPage) => {
+            setTablePages((current) => ({ ...current, [cacheKey]: freshPage }));
+            setTablePage((current) => (current === nextPage ? freshPage : current));
+          })
+          .catch((caught) => setError(errorMessage(caught)));
+      }
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -182,8 +260,30 @@ function App() {
   }
 
   async function refreshTable(page = tablePage?.page ?? 0, sort = tableSort) {
-    if (!selectedTable) return;
-    await openTable(selectedTable, page, sort);
+    if (!selectedTable || !connection) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      const nextPage = await api.refreshTableCache(
+        connection.id,
+        selectedTable.schema,
+        selectedTable.name,
+        page,
+        PAGE_SIZE,
+        sort,
+      );
+      setTablePage(nextPage);
+      setTablePages((current) => ({
+        ...current,
+        [tablePageCacheKey(selectedTable, page, sort)]: nextPage,
+      }));
+      setIndexes(await api.listIndexes(connection.id, selectedTable.schema, selectedTable.name));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function changeTableSort(sort: SortSpec | null) {
@@ -192,7 +292,71 @@ function App() {
     await openTable(selectedTable, 0, sort);
   }
 
+  async function updateGridCell(row: Record<string, unknown>, column: string, value: unknown) {
+    if (!connection || !selectedTable || !tablePage) return;
+    setError(null);
+    setLoading(true);
+    try {
+      await api.updateCell(
+        connection.id,
+        selectedTable.schema,
+        selectedTable.name,
+        rowIdentity(row, tablePage.identity.columns),
+        column,
+        value,
+      );
+      await refreshTable(tablePage.page, tableSort);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function insertGridRow(values: Record<string, unknown>) {
+    if (!connection || !selectedTable || !tablePage) return;
+    setError(null);
+    setLoading(true);
+    try {
+      await api.insertRow(connection.id, selectedTable.schema, selectedTable.name, values);
+      await refreshTable(tablePage.page, tableSort);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deleteGridRow(row: Record<string, unknown>) {
+    if (!connection || !selectedTable || !tablePage) return;
+    setError(null);
+    setLoading(true);
+    try {
+      await api.deleteRow(
+        connection.id,
+        selectedTable.schema,
+        selectedTable.name,
+        rowIdentity(row, tablePage.identity.columns),
+      );
+      await refreshTable(tablePage.page, tableSort);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function runSql() {
+    if (!connection || queryRunning) return;
+    if (isWriteSql(sql)) {
+      setPendingWriteSql(sql);
+      return;
+    }
+
+    await runReadSql(sql);
+  }
+
+  async function runReadSql(nextSql: string) {
     if (!connection || queryRunning) return;
 
     const nextRequestId = crypto.randomUUID();
@@ -200,15 +364,58 @@ function App() {
     setError(null);
     setQueryRunning(true);
     setActiveTab("query");
+    setWriteResult(null);
 
     try {
-      const page = await api.runQuery(connection.id, sql, PAGE_SIZE, nextRequestId);
+      const page = await api.runQuery(connection.id, nextSql, PAGE_SIZE, nextRequestId);
       setQueryPage(page);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setQueryRunning(false);
       setRequestId(null);
+    }
+  }
+
+  async function confirmWriteSql() {
+    if (!connection || !pendingWriteSql) return;
+
+    setError(null);
+    setQueryRunning(true);
+    setActiveTab("query");
+    try {
+      const result = await api.runWriteSql(connection.id, pendingWriteSql);
+      setWriteResult(result);
+      setQueryPage(null);
+      setPendingWriteSql(null);
+      if (selectedTable) {
+        await refreshTable(tablePage?.page ?? 0, tableSort);
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setQueryRunning(false);
+    }
+  }
+
+  async function generateQueryFromPrompt() {
+    if (!connection || aiRunning || !aiPrompt.trim()) return;
+
+    setError(null);
+    setAiRunning(true);
+    try {
+      const generated = await api.generateSql(connection.id, aiPrompt);
+      setGeneratedSql(generated);
+      setSql(generated.sql);
+      if (generated.autoRun) {
+        await runReadSql(generated.sql);
+      } else {
+        setError("Generated a write draft. Review it and press Run to confirm.");
+      }
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setAiRunning(false);
     }
   }
 
@@ -282,6 +489,16 @@ function App() {
                     <button
                       type="button"
                       className="iconButton"
+                      title="Rename connection"
+                      onClick={() =>
+                        renameSavedConnection(savedConnection.id, savedConnection.label)
+                      }
+                    >
+                      <Edit3 size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="iconButton"
                       title="Forget connection"
                       onClick={() => forgetSavedConnection(savedConnection.id)}
                     >
@@ -303,9 +520,19 @@ function App() {
       <aside className="sidebar">
         <div className="sidebarHeader">
           <div>
-            <strong>{connection.database}</strong>
-            <span>{connection.user}</span>
+            <strong>{connection.label || connection.database}</strong>
+            <span>
+              {connection.database} · {connection.user}
+            </span>
           </div>
+          <button
+            type="button"
+            className="iconButton"
+            title="Rename connection"
+            onClick={() => renameSavedConnection(connection.savedConnectionId, connection.label)}
+          >
+            <Edit3 size={15} />
+          </button>
           <button type="button" className="iconButton" title="Disconnect" onClick={disconnect}>
             <Unplug size={16} />
           </button>
@@ -368,6 +595,14 @@ function App() {
               <FileSearch size={16} />
               Query
             </button>
+            <button
+              type="button"
+              className={activeTab === "settings" ? "tab active" : "tab"}
+              onClick={() => setActiveTab("settings")}
+            >
+              <Settings size={16} />
+              Settings
+            </button>
           </div>
           {error && <div className="topError">{error}</div>}
         </div>
@@ -422,6 +657,14 @@ function App() {
                 loading={loading}
                 sort={tableSort}
                 onSortChange={changeTableSort}
+                editable={tablePage?.identity.editable ?? false}
+                editMode={editMode}
+                identityColumns={tablePage?.identity.columns ?? []}
+                editDisabledReason={tablePage?.identity.reason}
+                onEditModeChange={setEditMode}
+                onUpdateCell={updateGridCell}
+                onInsertRow={insertGridRow}
+                onDeleteRow={deleteGridRow}
               />
             </section>
 
@@ -432,14 +675,51 @@ function App() {
               onPage={(page) => refreshTable(page)}
             />
           </div>
-        ) : (
+        ) : activeTab === "query" ? (
           <div className="queryWorkspace">
             <section className="queryEditor">
+              <div className="aiPromptRow">
+                <input
+                  value={aiPrompt}
+                  placeholder="What do you want to view?"
+                  onChange={(event) => setAiPrompt(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void generateQueryFromPrompt();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="sparkButton"
+                  disabled={aiRunning || !aiPrompt.trim() || !settings?.hasOpenaiApiKey}
+                  title={
+                    settings?.hasOpenaiApiKey
+                      ? `Generate SQL with ${settings.openaiModel}`
+                      : "Add an OpenAI API key in Settings"
+                  }
+                  onClick={generateQueryFromPrompt}
+                >
+                  {aiRunning ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+                </button>
+              </div>
               <textarea
                 value={sql}
                 spellCheck={false}
                 onChange={(event) => setSql(event.target.value)}
               />
+              {generatedSql && (
+                <div className="generatedSqlNote">
+                  <span>{generatedSql.explanation}</span>
+                  <small>
+                    {generatedSql.confidence} confidence
+                    {generatedSql.referencedTables.length > 0
+                      ? ` · ${generatedSql.referencedTables.join(", ")}`
+                      : ""}
+                  </small>
+                </div>
+              )}
               <div className="queryActions">
                 <button
                   type="button"
@@ -466,11 +746,13 @@ function App() {
 
             <section className="resultArea">
               <ResultGrid
-                columns={queryPage?.columns ?? []}
-                rows={queryPage?.rows ?? []}
+                columns={queryPage?.columns ?? writeResult?.columns ?? []}
+                rows={queryPage?.rows ?? writeResult?.rows ?? []}
                 loading={queryRunning}
               />
             </section>
+
+            {writeResult && <div className="writeResultLine">{writeResult.message}</div>}
 
             <PageBar
               page={queryPage?.page ?? 0}
@@ -479,8 +761,65 @@ function App() {
               onPage={loadQueryPage}
             />
           </div>
+        ) : (
+          <div className="settingsWorkspace">
+            <section className="settingsPanel">
+              <div className="settingsHeader">
+                <h2>Settings</h2>
+                <span>{settings?.openaiModel ?? "gpt-5.5"} for SQL generation</span>
+              </div>
+
+              <label htmlFor="openaiKey">OpenAI API key</label>
+              <div className="settingsInputRow">
+                <input
+                  id="openaiKey"
+                  type="password"
+                  value={openaiKeyInput}
+                  placeholder={settings?.hasOpenaiApiKey ? "Key saved in Keychain" : "sk-..."}
+                  onChange={(event) => setOpenaiKeyInput(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="primaryButton"
+                  disabled={!openaiKeyInput.trim()}
+                  onClick={saveOpenaiKey}
+                >
+                  Save
+                </button>
+                <button
+                  type="button"
+                  className="secondaryButton"
+                  disabled={!settings?.hasOpenaiApiKey}
+                  onClick={clearOpenaiKey}
+                >
+                  Clear
+                </button>
+              </div>
+              <p className="settingsHint">
+                {settings?.hasOpenaiApiKey
+                  ? "API key is saved locally in macOS Keychain."
+                  : "Add a key to enable natural-language SQL generation."}
+              </p>
+            </section>
+          </div>
         )}
       </section>
+      {pendingWriteSql && (
+        <div className="modalOverlay">
+          <div className="confirmModal">
+            <h3>Run write statement?</h3>
+            <pre>{pendingWriteSql}</pre>
+            <div className="modalActions">
+              <button type="button" className="secondaryButton" onClick={() => setPendingWriteSql(null)}>
+                Cancel
+              </button>
+              <button type="button" className="primaryButton" onClick={confirmWriteSql}>
+                Run write
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -533,6 +872,26 @@ function formatSavedConnectionDate(timestamp: number) {
     day: "numeric",
     year: "numeric",
   });
+}
+
+function tablePageCacheKey(table: TableInfo, page: number, sort: SortSpec | null) {
+  const sortKey = sort ? `${sort.column}:${sort.direction}` : "none";
+  return `${table.schema}.${table.name}:${page}:${sortKey}`;
+}
+
+function rowIdentity(row: Record<string, unknown>, identityColumns: string[]) {
+  return identityColumns.reduce<Record<string, unknown>>((key, column) => {
+    key[column] = row[column];
+    return key;
+  }, {});
+}
+
+function isWriteSql(sql: string) {
+  const normalized = sql
+    .trim()
+    .replace(/^(?:--.*\n|\s|\/\*[\s\S]*?\*\/)*/g, "")
+    .toLowerCase();
+  return /^(insert|update|delete)\b/.test(normalized);
 }
 
 export default App;

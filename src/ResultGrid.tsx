@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Table2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, Plus, Table2, Trash2 } from "lucide-react";
 import type { QueryColumn, ResultRow, SortSpec } from "./types";
 
 type GridColumn = QueryColumn;
@@ -11,6 +11,14 @@ interface ResultGridProps {
   loading?: boolean;
   sort?: SortSpec | null;
   onSortChange?: (sort: SortSpec | null) => void;
+  editable?: boolean;
+  editMode?: boolean;
+  identityColumns?: string[];
+  editDisabledReason?: string | null;
+  onEditModeChange?: (enabled: boolean) => void;
+  onUpdateCell?: (row: ResultRow, column: string, value: unknown) => void;
+  onDeleteRow?: (row: ResultRow) => void;
+  onInsertRow?: (values: Record<string, unknown>) => void;
 }
 
 const ROW_HEIGHT = 32;
@@ -19,7 +27,21 @@ const MAX_WRAP_ROW_HEIGHT = 220;
 const HEADER_HEIGHT = 36;
 const OVERSCAN_PX = 320;
 
-export function ResultGrid({ columns, rows, loading = false, sort, onSortChange }: ResultGridProps) {
+export function ResultGrid({
+  columns,
+  rows,
+  loading = false,
+  sort,
+  onSortChange,
+  editable = false,
+  editMode = false,
+  identityColumns = [],
+  editDisabledReason,
+  onEditModeChange,
+  onUpdateCell,
+  onDeleteRow,
+  onInsertRow,
+}: ResultGridProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(520);
@@ -28,7 +50,9 @@ export function ResultGrid({ columns, rows, loading = false, sort, onSortChange 
   const [wrapCells, setWrapCells] = useState(false);
   const [activeView, setActiveView] = useState<GridView>("grid");
   const [detailRowIndex, setDetailRowIndex] = useState<number | null>(null);
+  const [selectedRowIndex, setSelectedRowIndex] = useState<number | null>(null);
   const activeSort = sort === undefined ? localSort : sort;
+  const identityColumnSet = useMemo(() => new Set(identityColumns), [identityColumns]);
 
   useEffect(() => {
     setWidths((current) => {
@@ -66,6 +90,7 @@ export function ResultGrid({ columns, rows, loading = false, sort, onSortChange 
   useEffect(() => {
     setActiveView("grid");
     setDetailRowIndex(null);
+    setSelectedRowIndex(null);
   }, [columns, rows]);
 
   const detailRow =
@@ -109,7 +134,41 @@ export function ResultGrid({ columns, rows, loading = false, sort, onSortChange 
 
   function openRowDetail(index: number) {
     setDetailRowIndex(index);
+    setSelectedRowIndex(index);
     setActiveView("detail");
+  }
+
+  function editCell(row: ResultRow, column: string, value: unknown) {
+    if (!editable || !editMode || identityColumnSet.has(column) || !onUpdateCell) return;
+    const nextValue = window.prompt(`New value for ${column}`, editPromptValue(value));
+    if (nextValue === null) return;
+    onUpdateCell(row, column, parseEditedValue(nextValue));
+  }
+
+  function insertRow() {
+    if (!editable || !editMode || !onInsertRow) return;
+    const nextValue = window.prompt("New row JSON", "{}");
+    if (nextValue === null) return;
+
+    try {
+      const parsed = JSON.parse(nextValue) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        window.alert("Row JSON must be an object.");
+        return;
+      }
+      onInsertRow(parsed as Record<string, unknown>);
+    } catch {
+      window.alert("Could not parse row JSON.");
+    }
+  }
+
+  function deleteSelectedRow() {
+    if (!editable || !editMode || selectedRowIndex === null || !onDeleteRow) return;
+    const row = displayedRows[selectedRowIndex];
+    if (!row) return;
+    if (window.confirm("Delete the selected row?")) {
+      onDeleteRow(row);
+    }
   }
 
   function startResize(column: string, event: React.PointerEvent) {
@@ -166,6 +225,31 @@ export function ResultGrid({ columns, rows, loading = false, sort, onSortChange 
 
         {activeView === "grid" ? (
           <div className="gridToolbarRight">
+            <label className="gridToggle" title={editable ? "Enable table editing" : editDisabledReason ?? "Editing unavailable"}>
+              <input
+                type="checkbox"
+                checked={editMode && editable}
+                disabled={!editable}
+                onChange={(event) => onEditModeChange?.(event.target.checked)}
+              />
+              <span>Edit mode</span>
+            </label>
+            {editMode && editable && (
+              <div className="gridEditActions">
+                <button type="button" className="iconButton" title="Insert row" onClick={insertRow}>
+                  <Plus size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="iconButton"
+                  title="Delete selected row"
+                  disabled={selectedRowIndex === null}
+                  onClick={deleteSelectedRow}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            )}
             <label className="gridToggle">
               <input
                 type="checkbox"
@@ -227,22 +311,29 @@ export function ResultGrid({ columns, rows, loading = false, sort, onSortChange 
                     className={[
                       "gridRow",
                       wrapCells ? "wrapCells" : "",
-                      detailRowIndex === metric.index ? "selected" : "",
+                      selectedRowIndex === metric.index ? "selected" : "",
                     ]
                       .filter(Boolean)
                       .join(" ")}
                     style={{ gridTemplateColumns: templateColumns, height: metric.height }}
-                    onDoubleClick={() => openRowDetail(metric.index)}
+                    onClick={() => setSelectedRowIndex(metric.index)}
                   >
                     {columns.map((column) => {
                       const value = metric.row[column.name];
+                      const canEditCell =
+                        editable && editMode && !identityColumnSet.has(column.name);
                       return (
                         <div
                           key={column.name}
-                          className={`gridCell ${
+                          className={`gridCell ${canEditCell ? "editableCell" : ""} ${
                             value === null || value === undefined ? "isNull" : ""
                           }`}
                           title={formatValue(value)}
+                          onDoubleClick={() =>
+                            canEditCell
+                              ? editCell(metric.row, column.name, value)
+                              : openRowDetail(metric.index)
+                          }
                         >
                           {formatValue(value)}
                         </div>
@@ -261,6 +352,22 @@ export function ResultGrid({ columns, rows, loading = false, sort, onSortChange 
       )}
     </div>
   );
+}
+
+function editPromptValue(value: unknown) {
+  if (value === null || value === undefined) return "null";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value);
+}
+
+function parseEditedValue(value: string) {
+  const trimmed = value.trim();
+  if (trimmed === "") return "";
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
 }
 
 function SortIcon({ activeSort, column }: { activeSort: SortSpec | null; column: string }) {

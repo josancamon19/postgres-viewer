@@ -7,6 +7,8 @@ export interface AppError {
 
 export interface ConnectionInfo {
   id: string;
+  savedConnectionId: string;
+  label: string;
   database: string;
   user: string;
 }
@@ -50,6 +52,12 @@ export interface IndexInfo {
   primary: boolean;
 }
 
+export interface TableIdentity {
+  editable: boolean;
+  columns: string[];
+  reason: string | null;
+}
+
 export interface SortSpec {
   column: string;
   direction: SortDirection;
@@ -63,6 +71,8 @@ export interface TablePage {
   page: number;
   pageSize: number;
   hasMore: boolean;
+  fromCache: boolean;
+  identity: TableIdentity;
 }
 
 export interface QueryPage {
@@ -72,4 +82,24 @@ export interface QueryPage {
   page: number;
   pageSize: number;
   hasMore: boolean;
+}
+
+export interface AppSettings {
+  hasOpenaiApiKey: boolean;
+  openaiModel: string;
+}
+
+export interface GeneratedSql {
+  sql: string;
+  explanation: string;
+  confidence: "low" | "medium" | "high" | string;
+  referencedTables: string[];
+  autoRun: boolean;
+}
+
+export interface WriteResult {
+  rowsAffected: number;
+  message: string;
+  columns: QueryColumn[];
+  rows: ResultRow[];
 }

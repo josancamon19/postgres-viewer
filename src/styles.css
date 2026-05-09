@@ -159,7 +159,7 @@ button:disabled {
 
 .savedConnectionItem {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 6px;
   border: 1px solid #d8dee6;
@@ -226,6 +226,11 @@ button:disabled {
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid #e3e8ee;
+}
+
+.sidebarHeader > div {
+  min-width: 0;
+  flex: 1;
 }
 
 .sidebarHeader strong,
@@ -363,6 +368,13 @@ button:disabled {
   flex-direction: column;
 }
 
+.settingsWorkspace {
+  min-height: 0;
+  flex: 1;
+  background: #ffffff;
+  padding: 18px;
+}
+
 .objectHeader {
   min-height: 68px;
   padding: 12px 16px;
@@ -469,6 +481,39 @@ button:disabled {
   background: #ffffff;
 }
 
+.aiPromptRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e3e8ee;
+  background: #fbfcfd;
+}
+
+.aiPromptRow input,
+.settingsInputRow input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+  color: #1f2933;
+  background: #ffffff;
+}
+
+.sparkButton {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: #ffffff;
+  background: #176b75;
+  cursor: pointer;
+}
+
 .queryEditor textarea {
   width: 100%;
   min-height: 138px;
@@ -492,6 +537,59 @@ button:disabled {
   align-items: center;
   gap: 8px;
   padding: 0 12px;
+}
+
+.generatedSqlNote,
+.writeResultLine {
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e3e8ee;
+  color: #273642;
+  font-size: 12px;
+}
+
+.generatedSqlNote small,
+.settingsHint {
+  color: #65727f;
+  font-size: 12px;
+}
+
+.writeResultLine {
+  min-height: 34px;
+  border-top: 1px solid #d8dee6;
+  border-bottom: 0;
+}
+
+.settingsPanel {
+  max-width: 760px;
+  display: grid;
+  gap: 12px;
+}
+
+.settingsHeader {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+
+.settingsHeader h2 {
+  margin: 0;
+  color: #1f2933;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.settingsHeader span,
+.settingsPanel label {
+  color: #65727f;
+  font-size: 12px;
+}
+
+.settingsInputRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
 }
 
 .resultArea {
@@ -581,6 +679,14 @@ button:disabled {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+}
+
+.gridEditActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  border-right: 1px solid #d8dee6;
 }
 
 .gridToggle {
@@ -736,6 +842,14 @@ button:disabled {
   font-size: 12px;
 }
 
+.editableCell {
+  cursor: cell;
+}
+
+.editableCell:hover {
+  background: rgba(35, 143, 157, 0.12);
+}
+
 .gridRow.wrapCells .gridCell {
   white-space: normal;
   word-break: break-word;
@@ -886,6 +1000,53 @@ button:disabled {
   animation: spin 0.8s linear infinite;
 }
 
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(6, 10, 14, 0.58);
+}
+
+.confirmModal {
+  width: min(720px, 100%);
+  display: grid;
+  gap: 12px;
+  border: 1px solid #d4dbe2;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.26);
+}
+
+.confirmModal h3 {
+  margin: 0;
+  color: #1f2933;
+  font-size: 16px;
+}
+
+.confirmModal pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  border: 1px solid #d8dee6;
+  border-radius: 6px;
+  background: #fbfcfd;
+  padding: 10px;
+  color: #17222b;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
@@ -917,10 +1078,12 @@ body {
 .topBar,
 .indexesDisclosure,
 .queryEditor,
+.settingsWorkspace,
 .resultArea,
 .gridFrame,
 .gridScroll,
-.rowDetailView {
+.rowDetailView,
+.confirmModal {
   background: #151b24;
 }
 
@@ -959,6 +1122,8 @@ body {
 }
 
 .connectionInputRow input,
+.aiPromptRow input,
+.settingsInputRow input,
 .schemaSelectRow select,
 .queryEditor textarea {
   border-color: #344251;
@@ -967,11 +1132,15 @@ body {
 }
 
 .connectionInputRow input::placeholder,
+.aiPromptRow input::placeholder,
+.settingsInputRow input::placeholder,
 .queryEditor textarea::placeholder {
   color: #667484;
 }
 
 .connectionInputRow input:focus,
+.aiPromptRow input:focus,
+.settingsInputRow input:focus,
 select:focus,
 textarea:focus {
   border-color: #2ba6b4;
@@ -979,12 +1148,14 @@ textarea:focus {
 }
 
 .connectionInputRow button,
+.sparkButton,
 .primaryButton {
   background: #238f9d;
   color: #ffffff;
 }
 
 .connectionInputRow button:hover:not(:disabled),
+.sparkButton:hover:not(:disabled),
 .primaryButton:hover:not(:disabled) {
   background: #2ba6b4;
 }
@@ -1041,11 +1212,14 @@ textarea:focus {
 .objectHeader,
 .indexesDisclosure,
 .queryEditor,
+.aiPromptRow,
+.generatedSqlNote,
 .queryEditor textarea,
 .pageBar,
 .gridToolbar,
 .gridHeader,
-.rowDetailHeader {
+.rowDetailHeader,
+.writeResultLine {
   border-color: #2b3542;
 }
 
@@ -1078,6 +1252,9 @@ textarea:focus {
 }
 
 .objectHeader,
+.settingsWorkspace,
+.aiPromptRow,
+.generatedSqlNote,
 .queryEditor textarea,
 .pageBar,
 .gridToolbar,
@@ -1088,6 +1265,39 @@ textarea:focus {
 .indexList span,
 .jsonDetail pre {
   background: #111820;
+}
+
+.settingsHeader h2,
+.generatedSqlNote,
+.writeResultLine,
+.confirmModal h3 {
+  color: #eef4fb;
+}
+
+.settingsHeader span,
+.settingsPanel label,
+.generatedSqlNote small,
+.settingsHint {
+  color: #8f9ca9;
+}
+
+.gridEditActions {
+  border-right-color: #2b3542;
+}
+
+.editableCell:hover {
+  background: rgba(43, 166, 180, 0.16);
+}
+
+.confirmModal {
+  border-color: #2b3542;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.42);
+}
+
+.confirmModal pre {
+  border-color: #2b3542;
+  background: #0f141b;
+  color: #d7dee8;
 }
 
 .indexEmpty {
