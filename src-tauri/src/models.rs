@@ -36,7 +36,7 @@ pub struct TableInfo {
     pub kind: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ColumnInfo {
     pub name: String,
@@ -53,7 +53,7 @@ pub struct QueryColumn {
     pub data_type: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexInfo {
     pub name: String,
@@ -62,7 +62,7 @@ pub struct IndexInfo {
     pub primary: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableIdentity {
     pub editable: bool,
@@ -88,6 +88,7 @@ pub enum SortDirection {
 #[serde(rename_all = "camelCase")]
 pub struct TablePage {
     pub columns: Vec<ColumnInfo>,
+    pub indexes: Vec<IndexInfo>,
     pub rows: Vec<Value>,
     pub page: u32,
     pub page_size: u32,

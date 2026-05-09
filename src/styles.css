@@ -1041,6 +1041,17 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.renameModal input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd5df;
+  border-radius: 6px;
+  padding: 10px 11px;
+  outline: none;
+  color: #1f2933;
+  background: #ffffff;
+}
+
 .modalActions {
   display: flex;
   justify-content: flex-end;
@@ -1298,6 +1309,17 @@ textarea:focus {
   border-color: #2b3542;
   background: #0f141b;
   color: #d7dee8;
+}
+
+.renameModal input {
+  border-color: #344251;
+  background: #0f141b;
+  color: #e7edf5;
+}
+
+.renameModal input:focus {
+  border-color: #2ba6b4;
+  box-shadow: 0 0 0 3px rgba(43, 166, 180, 0.18);
 }
 
 .indexEmpty {

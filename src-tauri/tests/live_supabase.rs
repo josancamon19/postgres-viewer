@@ -80,6 +80,43 @@ async fn live_supabase_connection_smoke() {
     .await
     .expect("table introspection should work");
 
+    if let Some(table) = tables.first().and_then(|row| row.get(0)) {
+        let bundle_sql = format!(
+            "
+            with column_data as (
+              select jsonb_agg(attr.attname order by attr.attnum) as columns_json
+              from pg_attribute attr
+              join pg_class cls on cls.oid = attr.attrelid
+              join pg_namespace ns on ns.oid = cls.relnamespace
+              where ns.nspname = 'public'
+                and cls.relname = {table_literal}
+                and attr.attnum > 0
+                and not attr.attisdropped
+            ),
+            page_data as (
+              select coalesce(jsonb_agg(to_jsonb(page_rows)), '[]'::jsonb) as rows_json
+              from (
+                select *
+                from public.{table_ident}
+                limit 1
+              ) page_rows
+            )
+            select
+              column_data.columns_json::text as columns_json,
+              page_data.rows_json::text as rows_json
+            from column_data, page_data
+            ",
+            table_literal = quote_literal(table),
+            table_ident = quote_ident(table),
+        );
+        let bundle = simple_rows(&client, &bundle_sql)
+            .await
+            .expect("bundled table metadata and row fetch should work");
+        let bundle = bundle.first().expect("bundle row should exist");
+        assert!(bundle.get("columns_json").is_some());
+        assert!(bundle.get("rows_json").is_some());
+    }
+
     client
         .batch_execute("begin read only; set local statement_timeout = '30s';")
         .await
@@ -129,4 +166,12 @@ fn normalize_connection_url(connection_url: &str) -> String {
         '?'
     };
     format!("{connection_url}{separator}sslmode=require")
+}
+
+fn quote_ident(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }

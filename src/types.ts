@@ -67,6 +67,7 @@ export type ResultRow = Record<string, unknown>;
 
 export interface TablePage {
   columns: ColumnInfo[];
+  indexes: IndexInfo[];
   rows: ResultRow[];
   page: number;
   pageSize: number;

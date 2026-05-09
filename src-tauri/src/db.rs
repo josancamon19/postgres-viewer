@@ -842,25 +842,23 @@ async fn fetch_table_page_live(
     page_size: u32,
     sort: Option<SortSpec>,
 ) -> Result<TablePage, AppError> {
-    let columns = cached_columns(client, Arc::clone(&cache), schema, table).await?;
-    let identity = cached_identity(client, Arc::clone(&cache), schema, table).await?;
-    let (rows, has_more) =
-        fetch_table_rows_inner(client, schema, table, page, page_size, sort.clone()).await?;
-    let table_page = TablePage {
-        columns,
-        rows,
-        page,
-        page_size,
-        has_more,
-        from_cache: false,
-        identity,
-    };
+    let table_page =
+        fetch_table_bundle_inner(client, schema, table, page, page_size, sort.clone()).await?;
     let page_key = page_cache_key(schema, table, page, page_size, sort.as_ref());
-    cache
-        .lock()
-        .await
-        .pages
-        .insert(page_key, table_page.clone());
+    let cache_key = table_cache_key(schema, table);
+    {
+        let mut cache = cache.lock().await;
+        cache
+            .columns
+            .insert(cache_key.clone(), table_page.columns.clone());
+        cache
+            .indexes
+            .insert(cache_key.clone(), table_page.indexes.clone());
+        cache
+            .identities
+            .insert(cache_key, table_page.identity.clone());
+        cache.pages.insert(page_key, table_page.clone());
+    }
     Ok(table_page)
 }
 
@@ -902,6 +900,166 @@ async fn cached_identity(
         .identities
         .insert(cache_key, identity.clone());
     Ok(identity)
+}
+
+async fn fetch_table_bundle_inner(
+    client: &Client,
+    schema: &str,
+    table: &str,
+    page: u32,
+    page_size: u32,
+    sort: Option<SortSpec>,
+) -> Result<TablePage, AppError> {
+    let limit = i64::from(page_size + 1);
+    let offset = i64::from(page.saturating_mul(page_size));
+    let order_clause = sort
+        .filter(|sort| !sort.column.trim().is_empty())
+        .map(|sort| {
+            let direction = match sort.direction {
+                SortDirection::Asc => "asc",
+                SortDirection::Desc => "desc",
+            };
+            format!(" order by {} {}", quote_ident(&sort.column), direction)
+        })
+        .unwrap_or_default();
+    let rows_sql = format!(
+        "select * from {}.{}{} limit {} offset {}",
+        quote_ident(schema),
+        quote_ident(table),
+        order_clause,
+        limit,
+        offset,
+    );
+    let sql = format!(
+        "
+        with table_ref as (
+          select cls.oid
+          from pg_class cls
+          join pg_namespace ns on ns.oid = cls.relnamespace
+          where ns.nspname = {schema_literal}
+            and cls.relname = {table_literal}
+          limit 1
+        ),
+        column_data as (
+          select coalesce(
+            jsonb_agg(
+              jsonb_build_object(
+                'name', attr.attname,
+                'dataType', pg_catalog.format_type(attr.atttypid, attr.atttypmod),
+                'nullable', not attr.attnotnull,
+                'ordinal', attr.attnum::int,
+                'defaultValue', pg_get_expr(def.adbin, def.adrelid)
+              )
+              order by attr.attnum
+            ),
+            '[]'::jsonb
+          ) as columns_json
+          from table_ref tbl
+          join pg_attribute attr on attr.attrelid = tbl.oid
+          left join pg_attrdef def
+            on def.adrelid = tbl.oid
+           and def.adnum = attr.attnum
+          where attr.attnum > 0
+            and not attr.attisdropped
+        ),
+        index_data as (
+          select coalesce(
+            jsonb_agg(
+              jsonb_build_object(
+                'name', idx.relname,
+                'definition', pg_get_indexdef(i.indexrelid),
+                'unique', i.indisunique,
+                'primary', i.indisprimary
+              )
+              order by i.indisprimary desc, i.indisunique desc, idx.relname
+            ),
+            '[]'::jsonb
+          ) as indexes_json
+          from table_ref tbl
+          join pg_index i on i.indrelid = tbl.oid
+          join pg_class idx on idx.oid = i.indexrelid
+        ),
+        identity_candidates as (
+          select
+            i.indisprimary,
+            array_agg(attr.attname order by key_columns.ord) as key_columns,
+            bool_and(attr.attnotnull) as all_not_null,
+            i.indpred is null and i.indexprs is null as is_simple
+          from table_ref tbl
+          join pg_index i on i.indrelid = tbl.oid
+          join pg_class idx on idx.oid = i.indexrelid
+          join unnest(i.indkey) with ordinality as key_columns(attnum, ord) on true
+          join pg_attribute attr
+            on attr.attrelid = tbl.oid
+           and attr.attnum = key_columns.attnum
+          where i.indisunique
+          group by i.indexrelid, idx.relname, i.indisprimary, i.indpred, i.indexprs
+          order by i.indisprimary desc, idx.relname
+        ),
+        identity_data as (
+          select coalesce(
+            (
+              select jsonb_build_object(
+                'editable', true,
+                'columns', to_jsonb(key_columns),
+                'reason', null
+              )
+              from identity_candidates
+              where is_simple
+                and (indisprimary or all_not_null)
+              limit 1
+            ),
+            jsonb_build_object(
+              'editable', false,
+              'columns', '[]'::jsonb,
+              'reason',
+                case
+                  when exists (select 1 from identity_candidates where is_simple)
+                    then 'Only nullable unique indexes were found; edits require a primary key or non-null unique key.'
+                  else 'Edits require a primary key or non-null unique key.'
+                end
+            )
+          ) as identity_json
+        ),
+        page_data as (
+          select coalesce(jsonb_agg(to_jsonb(page_rows)), '[]'::jsonb) as rows_json
+          from ({rows_sql}) page_rows
+        )
+        select
+          column_data.columns_json::text as columns_json,
+          index_data.indexes_json::text as indexes_json,
+          identity_data.identity_json::text as identity_json,
+          page_data.rows_json::text as rows_json
+        from column_data, index_data, identity_data, page_data
+        ",
+        schema_literal = quote_literal(schema),
+        table_literal = quote_literal(table),
+        rows_sql = rows_sql,
+    );
+    let rows = simple_query_rows(client, &sql).await?;
+    let row = rows.first().ok_or_else(|| {
+        AppError::new(
+            "empty_result",
+            format!("No metadata returned for {schema}.{table}."),
+        )
+    })?;
+    let columns = serde_json::from_str::<Vec<ColumnInfo>>(&required_text(row, "columns_json")?)?;
+    let indexes = serde_json::from_str::<Vec<IndexInfo>>(&required_text(row, "indexes_json")?)?;
+    let identity = serde_json::from_str::<TableIdentity>(&required_text(row, "identity_json")?)?;
+    let mut rows = serde_json::from_str::<Vec<Value>>(&required_text(row, "rows_json")?)?;
+    let has_more = rows.len() > page_size as usize;
+    rows.truncate(page_size as usize);
+
+    Ok(TablePage {
+        columns,
+        indexes,
+        rows,
+        page,
+        page_size,
+        has_more,
+        from_cache: false,
+        identity,
+    })
 }
 
 async fn describe_table_inner(
@@ -956,27 +1114,28 @@ async fn table_identity_inner(
     schema: &str,
     table: &str,
 ) -> Result<TableIdentity, AppError> {
-    let columns = describe_table_inner(client, schema, table).await?;
-    let column_by_ordinal = columns
-        .iter()
-        .filter_map(|column| column.ordinal.map(|ordinal| (ordinal, column)))
-        .collect::<HashMap<_, _>>();
     let rows = simple_query_rows(
         client,
         &format!(
             "
             select
               i.indisprimary as is_primary,
-              i.indkey::text as key_columns,
+              array_to_string(array_agg(attr.attname order by key_columns.ord), ',') as key_columns,
+              bool_and(attr.attnotnull) as all_not_null,
               i.indpred is null as no_predicate,
               i.indexprs is null as no_expression
             from pg_index i
             join pg_class tbl on tbl.oid = i.indrelid
             join pg_class idx on idx.oid = i.indexrelid
             join pg_namespace ns on ns.oid = tbl.relnamespace
+            join unnest(i.indkey) with ordinality as key_columns(attnum, ord) on true
+            join pg_attribute attr
+              on attr.attrelid = tbl.oid
+             and attr.attnum = key_columns.attnum
             where ns.nspname = {}
               and tbl.relname = {}
               and i.indisunique
+            group by i.indexrelid, idx.relname, i.indisprimary, i.indpred, i.indexprs
             order by i.indisprimary desc, idx.relname
             ",
             quote_literal(schema),
@@ -993,26 +1152,16 @@ async fn table_identity_inner(
             continue;
         }
 
-        let attnums = required_text(&row, "key_columns")?;
-        let key_columns = attnums
-            .split_whitespace()
-            .filter_map(|attnum| attnum.parse::<i32>().ok())
-            .filter_map(|attnum| column_by_ordinal.get(&attnum))
-            .map(|column| column.name.clone())
+        let key_columns = required_text(&row, "key_columns")?
+            .split(',')
+            .filter(|column| !column.trim().is_empty())
+            .map(str::to_string)
             .collect::<Vec<_>>();
         if key_columns.is_empty() {
             continue;
         }
 
-        let all_not_null = key_columns.iter().all(|name| {
-            columns
-                .iter()
-                .find(|column| column.name == *name)
-                .and_then(|column| column.nullable)
-                == Some(false)
-        });
-
-        if required_bool(&row, "is_primary")? || all_not_null {
+        if required_bool(&row, "is_primary")? || required_bool(&row, "all_not_null")? {
             return Ok(TableIdentity {
                 editable: true,
                 columns: key_columns,

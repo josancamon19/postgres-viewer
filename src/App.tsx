@@ -31,9 +31,15 @@ import type {
   WriteResult,
 } from "./types";
 
-const PAGE_SIZE = 500;
+const PAGE_SIZE = 100;
+const PREFETCH_TABLE_LIMIT = 8;
 
 type WorkspaceTab = "table" | "query" | "settings";
+
+interface RenameTarget {
+  id: string;
+  label: string;
+}
 
 function App() {
   const [connectionUrl, setConnectionUrl] = useState("");
@@ -61,6 +67,8 @@ function App() {
   const [requestId, setRequestId] = useState<string | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [openaiKeyInput, setOpenaiKeyInput] = useState("");
+  const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+  const [renameValue, setRenameValue] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const resultColumns = useMemo(
@@ -107,6 +115,7 @@ function App() {
         setIndexes([]);
         setTablePage(null);
         setEditMode(false);
+        void prefetchTables(items.slice(0, PREFETCH_TABLE_LIMIT));
       })
       .catch((caught) => setError(errorMessage(caught)))
       .finally(() => setLoading(false));
@@ -185,16 +194,27 @@ function App() {
     }
   }
 
-  async function renameSavedConnection(savedConnectionId: string, currentLabel: string) {
-    const label = window.prompt("Connection name", currentLabel);
-    if (label === null) return;
+  function beginRename(savedConnectionId: string, currentLabel: string) {
+    setRenameTarget({ id: savedConnectionId, label: currentLabel });
+    setRenameValue(currentLabel);
+  }
+
+  async function saveRename() {
+    if (!renameTarget) return;
+    const label = renameValue.trim();
+    if (!label) {
+      setError("Connection name cannot be empty.");
+      return;
+    }
 
     try {
-      const nextConnections = await api.updateSavedConnectionLabel(savedConnectionId, label);
+      const nextConnections = await api.updateSavedConnectionLabel(renameTarget.id, label);
       setSavedConnections(nextConnections);
       setConnection((current) =>
-        current?.savedConnectionId === savedConnectionId ? { ...current, label: label.trim() } : current,
+        current?.savedConnectionId === renameTarget.id ? { ...current, label } : current,
       );
+      setRenameTarget(null);
+      setRenameValue("");
     } catch (caught) {
       setError(errorMessage(caught));
     }
@@ -226,15 +246,22 @@ function App() {
     setActiveTab("table");
     const cacheKey = tablePageCacheKey(table, page, sort);
     const cachedPage = tablePages[cacheKey];
-    setTablePage(cachedPage ?? null);
+    if (cachedPage) {
+      setTablePage(cachedPage);
+      setIndexes(cachedPage.indexes);
+    }
     setLoading(true);
 
     try {
-      const [nextIndexes, nextPage] = await Promise.all([
-        api.listIndexes(connection.id, table.schema, table.name),
-        api.fetchTablePage(connection.id, table.schema, table.name, page, PAGE_SIZE, sort),
-      ]);
-      setIndexes(nextIndexes);
+      const nextPage = await api.fetchTablePage(
+        connection.id,
+        table.schema,
+        table.name,
+        page,
+        PAGE_SIZE,
+        sort,
+      );
+      setIndexes(nextPage.indexes);
       setTablePage(nextPage);
       setTablePages((current) => ({ ...current, [cacheKey]: nextPage }));
 
@@ -242,6 +269,7 @@ function App() {
         api
           .refreshTableCache(connection.id, table.schema, table.name, page, PAGE_SIZE, sort)
           .then((freshPage) => {
+            setIndexes(freshPage.indexes);
             setTablePages((current) => ({ ...current, [cacheKey]: freshPage }));
             setTablePage((current) => (current === nextPage ? freshPage : current));
           })
@@ -259,6 +287,22 @@ function App() {
     await openTable(table, 0, null);
   }
 
+  async function prefetchTables(nextTables: TableInfo[]) {
+    if (!connection) return;
+
+    for (const table of nextTables) {
+      const cacheKey = tablePageCacheKey(table, 0, null);
+      if (tablePages[cacheKey]) continue;
+
+      try {
+        const page = await api.fetchTablePage(connection.id, table.schema, table.name, 0, PAGE_SIZE, null);
+        setTablePages((current) => ({ ...current, [cacheKey]: page }));
+      } catch {
+        // Background warming should never interrupt the foreground table list.
+      }
+    }
+  }
+
   async function refreshTable(page = tablePage?.page ?? 0, sort = tableSort) {
     if (!selectedTable || !connection) return;
     setLoading(true);
@@ -274,11 +318,11 @@ function App() {
         sort,
       );
       setTablePage(nextPage);
+      setIndexes(nextPage.indexes);
       setTablePages((current) => ({
         ...current,
         [tablePageCacheKey(selectedTable, page, sort)]: nextPage,
       }));
-      setIndexes(await api.listIndexes(connection.id, selectedTable.schema, selectedTable.name));
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -490,9 +534,7 @@ function App() {
                       type="button"
                       className="iconButton"
                       title="Rename connection"
-                      onClick={() =>
-                        renameSavedConnection(savedConnection.id, savedConnection.label)
-                      }
+                      onClick={() => beginRename(savedConnection.id, savedConnection.label)}
                     >
                       <Edit3 size={15} />
                     </button>
@@ -529,7 +571,7 @@ function App() {
             type="button"
             className="iconButton"
             title="Rename connection"
-            onClick={() => renameSavedConnection(connection.savedConnectionId, connection.label)}
+            onClick={() => beginRename(connection.savedConnectionId, connection.label)}
           >
             <Edit3 size={15} />
           </button>
@@ -818,6 +860,39 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {renameTarget && (
+        <div className="modalOverlay">
+          <form
+            className="confirmModal renameModal"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveRename();
+            }}
+          >
+            <h3>Rename connection</h3>
+            <input
+              autoFocus
+              value={renameValue}
+              onChange={(event) => setRenameValue(event.target.value)}
+            />
+            <div className="modalActions">
+              <button
+                type="button"
+                className="secondaryButton"
+                onClick={() => {
+                  setRenameTarget(null);
+                  setRenameValue("");
+                }}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="primaryButton" disabled={!renameValue.trim()}>
+                Save
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </main>
